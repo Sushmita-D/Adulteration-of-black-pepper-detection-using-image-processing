@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Adulterated Pepper Seed Detector & Classifier</title>
+  <style>
+    :root { color-scheme: light; font-family: "Inter", system-ui, -apple-system, sans-serif; }
+    body { margin: 0; background: radial-gradient(circle at 10% 20%, #eff6ff 0, #f8fafc 20%, #f1f5f9 60%); color: #0f172a; min-height: 100vh; }
+    header { background: linear-gradient(135deg, #111827, #1e293b); color: white; padding: 18px 24px; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 10; }
+    h1 { font-size: 22px; margin: 0; letter-spacing: -0.02em; }
+    main { max-width: 1200px; margin: 28px auto 60px; padding: 0 18px; }
+    .card { background: white; border-radius: 16px; padding: 22px; box-shadow: 0 14px 45px rgba(15,23,42,0.08); margin-bottom: 18px; border: 1px solid #e2e8f0; }
+    .row { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 18px; }
+    .upload { border: 2px dashed #cbd5e1; border-radius: 14px; padding: 24px; text-align: center; background: #f8fafc; transition: border-color .2s, transform .2s; }
+    .upload:hover { border-color: #2563eb; transform: translateY(-2px); }
+    button { background: linear-gradient(135deg, #2563eb, #1d4ed8); color: white; border: none; border-radius: 12px; padding: 14px 18px; font-weight: 700; cursor: pointer; width: 100%; box-shadow: 0 10px 30px rgba(37,99,235,0.25); transition: transform .15s, box-shadow .15s; }
+    button:hover { transform: translateY(-1px); box-shadow: 0 12px 34px rgba(37,99,235,0.3); }
+    button:disabled { opacity: 0.65; cursor: not-allowed; box-shadow: none; }
+    .status { margin-top: 12px; font-size: 14px; color: #475569; min-height: 20px; }
+    .chips { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
+    .chip { background: #e0f2fe; color: #075985; padding: 8px 12px; border-radius: 999px; font-size: 13px; font-weight: 700; }
+    .outputs { display: flex; flex-direction: column; gap: 14px; margin-top: 10px; }
+    .output-card { background: linear-gradient(135deg, #f8fafc, #eef2ff); border: 1px solid #e2e8f0; border-radius: 14px; padding: 14px; display: grid; grid-template-columns: 120px 1fr 140px; gap: 12px; align-items: center; box-shadow: inset 0 1px 0 rgba(255,255,255,0.8); }
+    .output-card a { color: #1d4ed8; text-decoration: none; font-weight: 700; display: flex; align-items: center; gap: 8px; }
+    .pill { padding: 7px 12px; border-radius: 999px; background: rgba(14,165,233,0.18); color: #67e8f9; font-weight: 700; border: 1px solid rgba(103,232,249,0.4); }
+    .muted { color: #64748b; font-size: 14px; }
+    .hero { margin-bottom: 18px; }
+    .hero h2 { margin: 0 0 6px 0; font-size: 20px; }
+    .badge { background: #fef3c7; color: #92400e; padding: 6px 10px; border-radius: 999px; font-weight: 700; font-size: 12px; border: 1px solid #fcd34d; }
+    .thumb { width: 110px; height: 110px; border-radius: 12px; object-fit: cover; border: 1px solid #e2e8f0; background: #e2e8f0; }
+    .thumb.placeholder { display: grid; place-items: center; font-size: 26px; color: #94a3b8; }
+    .order { font-weight: 800; color: #0f172a; }
+    .preview { width: 100%; max-height: 260px; border-radius: 12px; object-fit: contain; background: #e2e8f0; border: 1px solid #e2e8f0; }
+    .buttons { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+    .btn-small { background: #1d4ed8; color: white; padding: 8px 12px; border-radius: 10px; text-decoration: none; font-weight: 700; }
+    .inline-preview { grid-column: 1 / 4; background: #f8fafc; border: 1px dashed #e2e8f0; border-radius: 12px; padding: 10px; }
+    .inline-preview img { width: 100%; max-height: 420px; object-fit: contain; border-radius: 12px; background: #e2e8f0; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Adulterated Pepper Seed Detector & Classifier</h1>
+    <div class="pill">YOLO + MobileNet</div>
+  </header>
+  <main>
+    <section class="card hero">
+      <h2>Upload an image</h2>
+      <p class="muted">Run YOLO detection, classify each seed, and open each output in its own page.</p>
+      <div class="row">
+        <div class="upload">
+          <input type="file" id="file" accept="image/*" />
+          <p class="muted">JPG or PNG · Max size depends on server</p>
+        </div>
+        <div>
+          <button id="process">🚀 Process Image</button>
+          <div id="status" class="status"></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="card" id="summary" style="display:none;">
+      <h2>Summary</h2>
+      <div class="chips" id="counts"></div>
+      <p class="muted" id="total"></p>
+    </section>
+
+    <section class="card" id="outputs" style="display:none;">
+      <div style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
+        <h2 style="margin:0;">Outputs (each opens a dedicated page)</h2>
+        <span class="badge">Tip: click any card</span>
+      </div>
+      <div class="outputs" id="links"></div>
+    </section>
+  </main>
+
+  <script>
+    const processBtn = document.getElementById('process');
+    const statusEl = document.getElementById('status');
+    const summaryCard = document.getElementById('summary');
+    const countsEl = document.getElementById('counts');
+    const totalEl = document.getElementById('total');
+    const outputsCard = document.getElementById('outputs');
+    const linksEl = document.getElementById('links');
+
+    processBtn.addEventListener('click', async () => {
+      const fileInput = document.getElementById('file');
+      if (!fileInput.files.length) {
+        alert('Please choose an image first.');
+        return;
+      }
+
+      processBtn.disabled = true;
+      statusEl.textContent = 'Processing... this may take a moment.';
+
+      const data = new FormData();
+      data.append('file', fileInput.files[0]);
+
+      try {
+        const res = await fetch('/api/process', { method: 'POST', body: data });
+        const payload = await res.json();
+        if (!res.ok) throw new Error(payload.error || 'Request failed');
+
+        // Summary
+        countsEl.innerHTML = '';
+        Object.entries(payload.class_counts).forEach(([cls, count]) => {
+          const chip = document.createElement('span');
+          chip.className = 'chip';
+          chip.textContent = `${cls}: ${count}`;
+          countsEl.appendChild(chip);
+        });
+        totalEl.textContent = `Total seeds: ${payload.total_seeds}`;
+        summaryCard.style.display = 'block';
+
+        // Links
+        const outputs = payload.outputs;
+        const linkData = [
+          { label: 'Original', file: outputs.original, emoji: '🖼️', isImage: true },
+          { label: 'YOLO Detection', file: outputs.detection, emoji: '🎯', isImage: true },
+          { label: 'Annotated Final', file: outputs.final, emoji: '✅', isImage: true },
+          { label: 'Class Distribution', file: outputs.pie, emoji: '🥧', isImage: true },
+          { label: 'Confidence Bars', file: outputs.bar, emoji: '📊', isImage: true },
+          { label: 'Classification TXT', file: outputs.classification_txt, emoji: '📄', isImage: false },
+          { label: 'Results CSV', file: outputs.csv, emoji: '⬇️', isImage: false },
+        ];
+
+        linksEl.innerHTML = '';
+        linkData.forEach((item, idx) => {
+          const card = document.createElement('div');
+          card.className = 'output-card';
+
+          const thumbHolder = document.createElement('div');
+          if (item.isImage) {
+            const img = document.createElement('img');
+            img.className = 'thumb';
+            img.src = `/api/outputs/${item.file}`;
+            img.alt = item.label;
+            thumbHolder.appendChild(img);
+          } else {
+            const placeholder = document.createElement('div');
+            placeholder.className = 'thumb placeholder';
+            placeholder.textContent = item.emoji;
+            thumbHolder.appendChild(placeholder);
+          }
+
+          const info = document.createElement('div');
+          const a = document.createElement('div');
+          a.style.display = 'flex';
+          a.style.alignItems = 'center';
+          a.style.gap = '8px';
+          a.innerHTML = `${item.emoji} ${item.label}`;
+          const order = document.createElement('div');
+          order.className = 'muted order';
+          order.textContent = `Step ${idx + 1}`;
+          info.appendChild(a);
+          info.appendChild(order);
+
+          const actions = document.createElement('div');
+          actions.className = 'buttons';
+          const openBtn = document.createElement('a');
+          openBtn.className = 'btn-small';
+          openBtn.href = `/api/outputs/${item.file}`;
+          openBtn.target = '_blank';
+          openBtn.rel = 'noopener';
+          openBtn.textContent = 'Open';
+          actions.appendChild(openBtn);
+          if (!item.isImage) {
+            const dlBtn = document.createElement('a');
+            dlBtn.className = 'btn-small';
+            dlBtn.href = `/api/outputs/${item.file}`;
+            dlBtn.download = item.file;
+            dlBtn.textContent = 'Download';
+            actions.appendChild(dlBtn);
+          }
+
+          card.appendChild(thumbHolder);
+          card.appendChild(info);
+          card.appendChild(actions);
+
+          // Inline preview for images to allow single-page scrolling
+          if (item.isImage) {
+            const inline = document.createElement('div');
+            inline.className = 'inline-preview';
+            const inlineImg = document.createElement('img');
+            inlineImg.src = `/api/outputs/${item.file}`;
+            inlineImg.alt = item.label;
+            inline.appendChild(inlineImg);
+            card.appendChild(inline);
+          } else {
+            const inline = document.createElement('div');
+            inline.className = 'inline-preview';
+            inline.textContent = 'Non-image file: click Download to view.';
+            card.appendChild(inline);
+          }
+
+          linksEl.appendChild(card);
+        });
+        outputsCard.style.display = 'block';
+        statusEl.textContent = 'Done! Click any output to view.';
+      } catch (err) {
+        console.error(err);
+        alert(err.message);
+        statusEl.textContent = 'Something went wrong.';
+      } finally {
+        processBtn.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>
+
