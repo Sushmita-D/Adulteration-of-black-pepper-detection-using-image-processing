@@ -13,42 +13,42 @@ from PIL import Image
 from torchvision import models, transforms
 from ultralytics import YOLO
 
+torch.set_num_threads(1)
+
 BASE_DIR = Path(__file__).parent
 MODELS_DIR = BASE_DIR / "models"
 MODELS_DIR.mkdir(exist_ok=True)
 
 DEVICE = torch.device("cpu")
+
 CLASSES = ["others", "papaya", "pepper"]
+
 CLASS_COLORS = {
-    "papaya": (0, 0, 255),   # Red in BGR
-    "pepper": (0, 255, 0),   # Green in BGR
-    "others": (0, 165, 255), # Orange in BGR
+    "papaya": (0, 0, 255),
+    "pepper": (0, 255, 0),
+    "others": (0, 165, 255),
 }
 
 YOLO_URL = "https://huggingface.co/sushmitadaivajna/balck-pepper-detection/resolve/main/best.pt"
 MOBILENET_URL = "https://huggingface.co/sushmitadaivajna/balck-pepper-detection/resolve/main/mobilenetv2_best.pth"
+
 YOLO_PATH = MODELS_DIR / "best.pt"
 MOBILENET_PATH = MODELS_DIR / "mobilenetv2_best.pth"
 
-tfm = transforms.Compose(
-    [
-        transforms.Resize((224, 224)),
-        transforms.ToTensor(),
-    ]
-)
+tfm = transforms.Compose([
+    transforms.Resize((224, 224)),
+    transforms.ToTensor(),
+])
 
-
-def download_model(url: str, destination: Path) -> None:
+def download_model(url: str, destination: Path):
     if destination.exists():
         return
-
-    destination.parent.mkdir(parents=True, exist_ok=True)
     response = requests.get(url, stream=True, timeout=120)
     response.raise_for_status()
-    with open(destination, "wb") as file_obj:
-        for chunk in response.iter_content(chunk_size=1024 * 1024):
+    with open(destination, "wb") as f:
+        for chunk in response.iter_content(1024 * 1024):
             if chunk:
-                file_obj.write(chunk)
+                f.write(chunk)
 
 
 @lru_cache(maxsize=1)
@@ -57,110 +57,100 @@ def load_models():
     download_model(MOBILENET_URL, MOBILENET_PATH)
 
     yolo_model = YOLO(str(YOLO_PATH))
-    cls_model = models.mobilenet_v2()
-    cls_model.classifier[1] = nn.Linear(cls_model.last_channel, len(CLASSES))
-    cls_model.load_state_dict(torch.load(MOBILENET_PATH, map_location=DEVICE))
-    cls_model.to(DEVICE)
-    cls_model.eval()
-    return yolo_model, cls_model
+    yolo_model.to("cpu")  # 🔥 force CPU
+
+    classifier = models.mobilenet_v2()
+    classifier.classifier[1] = nn.Linear(classifier.last_channel, len(CLASSES))
+    classifier.load_state_dict(torch.load(MOBILENET_PATH, map_location=DEVICE))
+    classifier.to(DEVICE)
+    classifier.eval()
+
+    return yolo_model, classifier
 
 
 def run_pipeline(image: Image.Image):
     if image is None:
-        return None, {"error": "Please upload an image first."}, pd.DataFrame(), "Total seeds: 0"
+        return None, {"error": "Upload image"}, pd.DataFrame(), "Total seeds: 0"
 
-    yolo_model, cls_model = load_models()
+    yolo_model, classifier = load_models()
 
-    rgb_img = image.convert("RGB")
-    img_np = np.array(rgb_img)
-    bgr_img = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)
+    img = image.convert("RGB")
+    img_np = np.array(img)
+    bgr = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)
 
-    detections = yolo_model(bgr_img, conf=0.10, iou=0.30, max_det=500, verbose=False)[0]
-    boxes = detections.boxes
+    # 🔥 Resize to reduce memory
+    bgr = cv2.resize(bgr, (640, 640))
+
+    results = yolo_model(bgr, conf=0.25, iou=0.45, max_det=100, verbose=False)[0]
 
     class_counts = {"pepper": 0, "papaya": 0, "others": 0}
     predictions = []
 
-    for seed_id, box in enumerate(boxes, start=1):
+    for i, box in enumerate(results.boxes, start=1):
         x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
-        x1 = max(0, x1)
-        y1 = max(0, y1)
-        x2 = min(bgr_img.shape[1], x2)
-        y2 = min(bgr_img.shape[0], y2)
-        if x2 <= x1 or y2 <= y1:
+
+        crop = bgr[y1:y2, x1:x2]
+        if crop.size == 0:
             continue
 
-        crop_bgr = bgr_img[y1:y2, x1:x2]
-        if crop_bgr.size == 0:
-            continue
-
-        crop_rgb = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2RGB)
+        crop_rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
         crop_pil = Image.fromarray(crop_rgb)
-        crop_tensor = tfm(crop_pil).unsqueeze(0).to(DEVICE)
+        tensor = tfm(crop_pil).unsqueeze(0).to(DEVICE)
 
         with torch.no_grad():
-            logits = cls_model(crop_tensor)
+            logits = classifier(tensor)
             probs = F.softmax(logits, dim=1)
-            pred_idx = probs.argmax(1).item()
+            pred = probs.argmax(1).item()
 
-        cls_label = CLASSES[pred_idx]
-        cls_conf = float(probs[0][pred_idx])
-        class_counts[cls_label] += 1
+        label = CLASSES[pred]
+        conf = float(probs[0][pred])
 
-        predictions.append(
-            {
-                "Seed_ID": seed_id,
-                "Class": cls_label,
-                "Class_Conf": round(cls_conf, 4),
-                "Box": f"[{x1}, {y1}, {x2}, {y2}]",
-            }
-        )
+        class_counts[label] += 1
 
-        label_text = f"{cls_label} ({cls_conf:.2f})"
-        box_color = CLASS_COLORS.get(cls_label, (255, 255, 255))
-        cv2.rectangle(bgr_img, (x1, y1), (x2, y2), box_color, 2)
+        predictions.append({
+            "Seed_ID": i,
+            "Class": label,
+            "Confidence": round(conf, 3)
+        })
+
+        color = CLASS_COLORS[label]
+        cv2.rectangle(bgr, (x1, y1), (x2, y2), color, 2)
         cv2.putText(
-            bgr_img,
-            label_text,
+            bgr,
+            f"{label} {conf:.2f}",
             (x1, max(20, y1 - 10)),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.5,
-            box_color,
+            color,
             1,
-            cv2.LINE_AA,
         )
 
-    output_rgb = cv2.cvtColor(bgr_img, cv2.COLOR_BGR2RGB)
-    table_df = pd.DataFrame(predictions)
-    total_text = f"Total seeds: {len(predictions)}"
-    return output_rgb, class_counts, table_df, total_text
+    output = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+    df = pd.DataFrame(predictions)
 
+    return output, class_counts, df, f"Total seeds: {len(predictions)}"
 
-with gr.Blocks(title="Adulterated Pepper Seed Detector & Classifier") as demo:
-    gr.Markdown("# Adulterated Pepper Seed Detector & Classifier")
-    gr.Markdown("Run YOLO detection, classify each seed, and open each output in its own page.")
-
-    with gr.Row():
-        input_image = gr.Image(type="pil", label="Upload an image")
-        annotated_image = gr.Image(type="numpy", label="Annotated Final")
-
-    process_btn = gr.Button("🚀 Process Image", variant="primary")
+with gr.Blocks(theme=gr.themes.Soft()) as demo:
+    gr.Markdown("# 🌱 Black Pepper Adulteration Detection")
+    gr.Markdown("Detect pepper vs papaya seeds using AI")
 
     with gr.Row():
-        class_counts_out = gr.JSON(label="Class Distribution")
-        total_count_out = gr.Textbox(label="Total Count", interactive=False)
+        input_img = gr.Image(type="pil", label="Upload Image")
+        output_img = gr.Image(label="Result")
 
-    predictions_table = gr.Dataframe(
-        headers=["Seed_ID", "Class", "Class_Conf", "Box"],
-        datatype=["number", "str", "number", "str"],
-        label="Predictions Table",
-        interactive=False,
-    )
+    btn = gr.Button("🚀 Analyze")
 
-    process_btn.click(
+    with gr.Row():
+        counts = gr.JSON(label="Class Distribution")
+        total = gr.Textbox(label="Total Seeds")
+
+    table = gr.Dataframe(label="Predictions")
+
+    btn.click(
         fn=run_pipeline,
-        inputs=input_image,
-        outputs=[annotated_image, class_counts_out, predictions_table, total_count_out],
+        inputs=input_img,
+        outputs=[output_img, counts, table, total]
     )
 
-demo.launch(server_name="0.0.0.0", server_port=7860)
+if __name__ == "__main__":
+    demo.queue().launch()
